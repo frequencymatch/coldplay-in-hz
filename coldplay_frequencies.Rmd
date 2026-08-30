@@ -1,0 +1,184 @@
+---
+title: "The Frequencies of Coldplay"
+subtitle: "Turning musical keys into the Hz they actually vibrate at"
+author: "frequencymatch"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 8, fig.height = 5, dpi = 120)
+library(tidyverse)
+```
+
+## Why frequencies?
+
+Every note is, underneath everything, a frequency — a number of vibrations per
+second, measured in Hertz. A song written in the key of A is built around a
+fundamental that oscillates at 440 Hz. Change the key, and you change the
+frequency the whole piece is anchored to.
+
+Spotify's audio analysis gives us the **key** of each track (as an integer from
+0 to 11, following pitch-class notation where 0 = C, 1 = C♯, and so on). That's
+usually treated as a categorical label. But a key isn't really a category — it's
+a pitch, and a pitch is a frequency. So this little project does something
+simple: it takes Coldplay's discography and asks a slightly unusual question.
+
+**At what frequencies does Coldplay actually vibrate?**
+
+## The data
+
+The dataset covers the studio albums from *Parachutes* (2000) to
+*Music of the Spheres* (2021), with each track's key, mode, tempo, energy and
+valence.
+
+```{r load}
+tracks <- read_csv("data/coldplay_tracks.csv")
+glimpse(tracks)
+```
+
+## From key to Hz
+
+To turn a pitch class into a frequency, we use the standard equal-temperament
+formula. Taking A4 = 440 Hz as the reference, any note *n* semitones away from A
+has a frequency of:
+
+$$ f = 440 \times 2^{\,n/12} $$
+
+We map each pitch class (0–11) to the octave nearest the human "central" register
+(the A above middle C = 440 Hz), so the numbers stay comparable across songs.
+
+```{r key-to-hz}
+# pitch-class names, 0 = C ... 11 = B
+pitch_names <- c("C", "C#", "D", "D#", "E", "F",
+                 "F#", "G", "G#", "A", "A#", "B")
+
+# semitone distance of each pitch class from A (pitch class 9), within one octave
+# we anchor everything to the A = 440 Hz octave
+key_to_hz <- function(key) {
+  # semitones from A (pitch class 9)
+  semis <- key - 9
+  440 * 2^(semis / 12)
+}
+
+tracks <- tracks %>%
+  mutate(
+    key_name = factor(pitch_names[key + 1], levels = pitch_names),
+    freq_hz  = key_to_hz(key),
+    mode_lab = if_else(mode == 1, "major", "minor")
+  )
+
+tracks %>%
+  select(track, album, key_name, freq_hz, mode_lab) %>%
+  head(10)
+```
+
+## The frequency fingerprint
+
+Here is every Coldplay track placed on the frequency axis it's anchored to. Each
+point is a song; colour marks major or minor.
+
+```{r fingerprint, fig.height=5.5}
+ggplot(tracks, aes(x = freq_hz, y = fct_reorder(album, year), colour = mode_lab)) +
+  geom_jitter(height = 0.18, size = 2.6, alpha = 0.85) +
+  scale_colour_manual(values = c(major = "#2dd4bf", minor = "#0e7490")) +
+  labs(
+    title = "The frequencies of Coldplay",
+    subtitle = "Each track placed at the Hz of its fundamental key",
+    x = "Fundamental frequency (Hz)", y = NULL, colour = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "top",
+        plot.title = element_text(face = "bold"))
+```
+
+## Which frequencies does Coldplay return to?
+
+Some frequencies come up again and again. Counting how often each fundamental
+appears across the whole discography reveals the band's harmonic centre of
+gravity.
+
+```{r common-freqs}
+freq_counts <- tracks %>%
+  count(key_name, freq_hz, sort = TRUE) %>%
+  mutate(freq_label = paste0(key_name, "  (", round(freq_hz), " Hz)"))
+
+ggplot(freq_counts, aes(x = fct_reorder(freq_label, n), y = n)) +
+  geom_col(fill = "#14b8a6", width = 0.7) +
+  coord_flip() +
+  labs(
+    title = "Coldplay's most-used fundamentals",
+    x = NULL, y = "Number of tracks"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+## A short detour: 432 vs 440
+
+There's a long-running idea in some corners of music that 432 Hz — rather than
+the modern standard of 440 Hz — is a "more natural" tuning, closer to something
+resonant in the world. It's not a scientific claim so much as a piece of
+folklore, but it's a nice reminder that the *reference* frequency is a choice,
+not a law of nature.
+
+Out of curiosity, here's what Coldplay's fundamentals would look like if the
+whole catalogue had been tuned to A = 432 Hz instead of 440. Everything simply
+shifts down by the same small ratio.
+
+```{r 432}
+tracks <- tracks %>%
+  mutate(freq_hz_432 = freq_hz * (432 / 440))
+
+tracks %>%
+  summarise(
+    mean_440 = mean(freq_hz),
+    mean_432 = mean(freq_hz_432),
+    shift_hz = mean_440 - mean_432
+  )
+```
+
+The difference is tiny — a few Hz — but it's the kind of thing you only notice
+if you're listening closely.
+
+## Has their frequency drifted over time?
+
+Finally: as the albums went by, did the band drift toward higher or lower
+fundamentals? We take the mean fundamental frequency per album and follow it
+across two decades.
+
+```{r drift}
+album_freq <- tracks %>%
+  group_by(album, year) %>%
+  summarise(mean_freq = mean(freq_hz), .groups = "drop") %>%
+  arrange(year)
+
+ggplot(album_freq, aes(x = year, y = mean_freq)) +
+  geom_line(colour = "#0e7490", linewidth = 0.9) +
+  geom_point(colour = "#2dd4bf", size = 3) +
+  labs(
+    title = "Coldplay's average fundamental frequency, album by album",
+    x = NULL, y = "Mean fundamental frequency (Hz)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+## Closing note
+
+Treating a key as a frequency doesn't change the music — it just changes how you
+look at it. Underneath the lyrics and the production, every one of these songs is
+a set of numbers, patiently vibrating at a fixed rate, waiting to be heard.
+
+Some frequencies find each other. Some just wait.
+
+---
+
+*Data: Spotify audio features (key, mode, tempo, energy, valence). Frequencies
+derived from equal-temperament tuning with A4 = 440 Hz.*
